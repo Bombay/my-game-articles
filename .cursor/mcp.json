@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "game_news_working": {
+      "command": "/Users/hyuntkim/workspace/my-game-articles/run_mcp_server.sh"
+    }
+  }
+}

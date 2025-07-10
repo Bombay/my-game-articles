@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "game_news_simple": {
+      "command": "/Users/hyuntkim/workspace/my-game-articles/.venv/bin/python",
+      "args": ["src/ultimate_simple.py"],
+      "cwd": "/Users/hyuntkim/workspace/my-game-articles"
+    }
+  }
+}

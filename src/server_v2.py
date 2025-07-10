@@ -1,18 +1,14 @@
 """
-게임 뉴스 수집 MCP 서버
-
-3개 게임(에픽세븐, 로스트아크, 로드나인)의 뉴스 정보를 수집하는 MCP 서버
+게임 뉴스 수집 MCP 서버 (간단한 버전)
 """
 
 import asyncio
 import logging
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
-from mcp import types
 from mcp.server import Server
-from mcp.server.models import InitializationOptions
-from mcp.types import ServerCapabilities
 from mcp.server.stdio import stdio_server
+from mcp.server.models import InitializationOptions
+from mcp.types import ServerCapabilities, Tool, TextContent
+from typing import Any, Dict, List, Sequence
 
 from .config.settings import settings
 from .handlers.lordnine import LordnineHandler
@@ -27,9 +23,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-
-# MCP 서버 인스턴스 생성
-server = Server(settings.SERVER_NAME)
+# MCP 서버 생성
+app = Server(settings.SERVER_NAME)
 
 # 게임별 핸들러 초기화
 handlers = {
@@ -39,13 +34,13 @@ handlers = {
 }
 
 
-@server.list_tools()
-async def handle_list_tools() -> List[types.Tool]:
+@app.list_tools()
+async def handle_list_tools() -> List[Tool]:
     """사용 가능한 도구 목록 반환"""
-    logger.info("=== list_tools 요청 받음 ===")
+    logger.info("도구 목록 요청 받음")
+    
     tools = [
-        # 공지사항 도구
-        types.Tool(
+        Tool(
             name="get_game_announcements",
             description="지정된 게임의 최신 공지사항 목록을 가져옵니다.",
             inputSchema={
@@ -60,7 +55,7 @@ async def handle_list_tools() -> List[types.Tool]:
                 "required": ["game"]
             }
         ),
-        types.Tool(
+        Tool(
             name="get_announcement_detail",
             description="특정 공지사항의 상세 정보를 가져옵니다.",
             inputSchema={
@@ -79,9 +74,7 @@ async def handle_list_tools() -> List[types.Tool]:
                 "required": ["game", "url"]
             }
         ),
-        
-        # 이벤트 도구
-        types.Tool(
+        Tool(
             name="get_game_events",
             description="지정된 게임의 최신 이벤트 목록을 가져옵니다.",
             inputSchema={
@@ -96,7 +89,7 @@ async def handle_list_tools() -> List[types.Tool]:
                 "required": ["game"]
             }
         ),
-        types.Tool(
+        Tool(
             name="get_event_detail",
             description="특정 이벤트의 상세 정보를 가져옵니다.",
             inputSchema={
@@ -115,9 +108,7 @@ async def handle_list_tools() -> List[types.Tool]:
                 "required": ["game", "url"]
             }
         ),
-        
-        # 업데이트 도구
-        types.Tool(
+        Tool(
             name="get_game_updates",
             description="지정된 게임의 최신 업데이트 목록을 가져옵니다.",
             inputSchema={
@@ -132,7 +123,7 @@ async def handle_list_tools() -> List[types.Tool]:
                 "required": ["game"]
             }
         ),
-        types.Tool(
+        Tool(
             name="get_update_detail",
             description="특정 업데이트의 상세 정보를 가져옵니다.",
             inputSchema={
@@ -153,16 +144,12 @@ async def handle_list_tools() -> List[types.Tool]:
         )
     ]
     
-    logger.info(f"도구 목록 요청: {len(tools)}개 도구 반환")
-    logger.info(f"반환할 도구들: {[tool.name for tool in tools]}")
+    logger.info(f"{len(tools)}개 도구 반환")
     return tools
 
 
-@server.call_tool()
-async def handle_call_tool(
-    name: str, 
-    arguments: Dict[str, Any]
-) -> Sequence[types.TextContent]:
+@app.call_tool()
+async def handle_call_tool(name: str, arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """도구 호출 핸들러"""
     try:
         logger.info(f"도구 호출: {name}, 인수: {arguments}")
@@ -170,12 +157,10 @@ async def handle_call_tool(
         # 게임 파라미터 확인
         game = arguments.get("game")
         if not game or game not in handlers:
-            return [
-                types.TextContent(
-                    type="text",
-                    text=f"지원하지 않는 게임입니다: {game}. 지원 게임: {', '.join(settings.SUPPORTED_GAMES)}"
-                )
-            ]
+            return [TextContent(
+                type="text",
+                text=f"지원하지 않는 게임입니다: {game}. 지원 게임: {', '.join(settings.SUPPORTED_GAMES)}"
+            )]
         
         handler = handlers[game]
         
@@ -185,78 +170,45 @@ async def handle_call_tool(
         elif name == "get_announcement_detail":
             url = arguments.get("url")
             if not url:
-                return [types.TextContent(type="text", text="URL 파라미터가 필요합니다.")]
+                return [TextContent(type="text", text="URL 파라미터가 필요합니다.")]
             return await handler.get_announcement_detail(url, **arguments)
         elif name == "get_game_events":
             return await handler.get_events(**arguments)
         elif name == "get_event_detail":
             url = arguments.get("url")
             if not url:
-                return [types.TextContent(type="text", text="URL 파라미터가 필요합니다.")]
+                return [TextContent(type="text", text="URL 파라미터가 필요합니다.")]
             return await handler.get_event_detail(url, **arguments)
         elif name == "get_game_updates":
             return await handler.get_updates(**arguments)
         elif name == "get_update_detail":
             url = arguments.get("url")
             if not url:
-                return [types.TextContent(type="text", text="URL 파라미터가 필요합니다.")]
+                return [TextContent(type="text", text="URL 파라미터가 필요합니다.")]
             return await handler.get_update_detail(url, **arguments)
         else:
-            return [
-                types.TextContent(
-                    type="text",
-                    text=f"알 수 없는 도구입니다: {name}"
-                )
-            ]
+            return [TextContent(type="text", text=f"알 수 없는 도구입니다: {name}")]
     
     except Exception as e:
         logger.error(f"도구 호출 실패: {name}, 오류: {e}")
-        return [
-            types.TextContent(
-                type="text",
-                text=f"오류: {str(e)}"
-            )
-        ]
+        return [TextContent(type="text", text=f"오류: {str(e)}")]
 
 
-async def run_server():
-    """서버 실행"""
-    logger.info("=== 게임 뉴스 MCP 서버 시작 ===")
-    logger.info(f"서버명: {settings.SERVER_NAME} v{settings.SERVER_VERSION}")
-    logger.info(f"지원 게임: {settings.SUPPORTED_GAMES}")
-    logger.info(f"핸들러 수: {len(handlers)}")
-    logger.info(f"로그 레벨: {settings.LOG_LEVEL}")
+async def main():
+    """메인 함수"""
+    logger.info(f"게임 뉴스 MCP 서버 시작: {settings.SERVER_NAME} v{settings.SERVER_VERSION}")
     
-    try:
-        async with stdio_server() as (read_stream, write_stream):
-            logger.info("=== stdio 서버 시작됨 ===")
-            logger.info("=== MCP 서버 실행 시작 ===")
-            initialization_options = InitializationOptions(
+    async with stdio_server() as (read_stream, write_stream):
+        await app.run(
+            read_stream,
+            write_stream,
+            InitializationOptions(
                 server_name=settings.SERVER_NAME,
                 server_version=settings.SERVER_VERSION,
                 capabilities=ServerCapabilities()
             )
-            logger.info(f"=== 초기화 옵션: {initialization_options} ===")
-            await server.run(
-                read_stream,
-                write_stream,
-                initialization_options
-            )
-    except Exception as e:
-        logger.error(f"=== 서버 실행 오류: {e} ===")
-        raise
-
-
-def main():
-    """메인 함수"""
-    # 시작 메시지를 stderr로 출력 (stdio 통신에 방해되지 않도록)
-    import sys
-    print("=== MCP 서버 시작 중... ===", file=sys.stderr)
-    print(f"=== Python 경로: {sys.executable} ===", file=sys.stderr)
-    print(f"=== 작업 디렉토리: {Path.cwd()} ===", file=sys.stderr)
-    
-    asyncio.run(run_server())
+        )
 
 
 if __name__ == "__main__":
-    main() 
+    asyncio.run(main()) 
