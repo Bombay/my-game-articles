@@ -1,0 +1,251 @@
+"""
+게임 뉴스 수집 MCP 서버
+
+3개 게임(에픽세븐, 로스트아크, 로드나인)의 뉴스 정보를 수집하는 MCP 서버
+"""
+
+import asyncio
+import logging
+from typing import Any, Dict, List, Optional, Sequence
+from mcp import types
+from mcp.server import Server
+from mcp.server.models import InitializationOptions
+from mcp.server.session import ServerSession
+from mcp.server.stdio import stdio_server
+
+from .config.settings import settings
+from .handlers.lordnine import LordnineHandler
+from .handlers.epic_seven import EpicSevenHandler
+from .handlers.lost_ark import LostArkHandler
+
+
+# 로깅 설정
+logging.basicConfig(
+    level=getattr(logging, settings.LOG_LEVEL),
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+
+class GameNewsServer:
+    """게임 뉴스 수집 MCP 서버"""
+    
+    def __init__(self):
+        self.server = Server(settings.SERVER_NAME)
+        
+        # 게임별 핸들러 초기화
+        self.handlers = {
+            "lordnine": LordnineHandler(),
+            "epic_seven": EpicSevenHandler(),
+            "lost_ark": LostArkHandler()
+        }
+        
+        self.setup_tools()
+        self.setup_handlers()
+        logger.info(f"게임 뉴스 MCP 서버 초기화 완료: {settings.SERVER_NAME} v{settings.SERVER_VERSION}")
+    
+    def setup_tools(self):
+        """6개 도구 등록 (game 파라미터로 게임 구분)"""
+        tools = [
+            # 공지사항 도구
+            types.Tool(
+                name="get_game_announcements",
+                description="지정된 게임의 최신 공지사항 목록을 가져옵니다.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "game": {
+                            "type": "string",
+                            "enum": settings.SUPPORTED_GAMES,
+                            "description": "게임 이름 (lordnine, epic_seven, lost_ark)"
+                        }
+                    },
+                    "required": ["game"]
+                }
+            ),
+            types.Tool(
+                name="get_announcement_detail",
+                description="특정 공지사항의 상세 정보를 가져옵니다.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "game": {
+                            "type": "string",
+                            "enum": settings.SUPPORTED_GAMES,
+                            "description": "게임 이름 (lordnine, epic_seven, lost_ark)"
+                        },
+                        "url": {
+                            "type": "string",
+                            "description": "공지사항 URL"
+                        }
+                    },
+                    "required": ["game", "url"]
+                }
+            ),
+            
+            # 이벤트 도구
+            types.Tool(
+                name="get_game_events",
+                description="지정된 게임의 최신 이벤트 목록을 가져옵니다.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "game": {
+                            "type": "string",
+                            "enum": settings.SUPPORTED_GAMES,
+                            "description": "게임 이름 (lordnine, epic_seven, lost_ark)"
+                        }
+                    },
+                    "required": ["game"]
+                }
+            ),
+            types.Tool(
+                name="get_event_detail",
+                description="특정 이벤트의 상세 정보를 가져옵니다.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "game": {
+                            "type": "string",
+                            "enum": settings.SUPPORTED_GAMES,
+                            "description": "게임 이름 (lordnine, epic_seven, lost_ark)"
+                        },
+                        "url": {
+                            "type": "string",
+                            "description": "이벤트 URL"
+                        }
+                    },
+                    "required": ["game", "url"]
+                }
+            ),
+            
+            # 업데이트 도구
+            types.Tool(
+                name="get_game_updates",
+                description="지정된 게임의 최신 업데이트 목록을 가져옵니다.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "game": {
+                            "type": "string",
+                            "enum": settings.SUPPORTED_GAMES,
+                            "description": "게임 이름 (lordnine, epic_seven, lost_ark)"
+                        }
+                    },
+                    "required": ["game"]
+                }
+            ),
+            types.Tool(
+                name="get_update_detail",
+                description="특정 업데이트의 상세 정보를 가져옵니다.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "game": {
+                            "type": "string",
+                            "enum": settings.SUPPORTED_GAMES,
+                            "description": "게임 이름 (lordnine, epic_seven, lost_ark)"
+                        },
+                        "url": {
+                            "type": "string",
+                            "description": "업데이트 URL"
+                        }
+                    },
+                    "required": ["game", "url"]
+                }
+            )
+        ]
+        
+        # 도구 등록
+        @self.server.list_tools()
+        async def handle_list_tools() -> List[types.Tool]:
+            return tools
+        
+        logger.info(f"총 {len(tools)}개 도구 등록 완료")
+    
+    def setup_handlers(self):
+        """도구 호출 핸들러 설정"""
+        
+        @self.server.call_tool()
+        async def handle_call_tool(
+            name: str, 
+            arguments: Dict[str, Any]
+        ) -> Sequence[types.TextContent]:
+            """도구 호출 핸들러"""
+            try:
+                logger.info(f"도구 호출: {name}, 인수: {arguments}")
+                
+                # 게임 파라미터 확인
+                game = arguments.get("game")
+                if not game or game not in self.handlers:
+                    return [
+                        types.TextContent(
+                            type="text",
+                            text=f"지원하지 않는 게임입니다: {game}. 지원 게임: {', '.join(settings.SUPPORTED_GAMES)}"
+                        )
+                    ]
+                
+                handler = self.handlers[game]
+                
+                # 도구별 핸들러 호출
+                if name == "get_game_announcements":
+                    return await handler.get_announcements(**arguments)
+                elif name == "get_announcement_detail":
+                    url = arguments.get("url")
+                    if not url:
+                        return [types.TextContent(type="text", text="URL 파라미터가 필요합니다.")]
+                    return await handler.get_announcement_detail(url, **arguments)
+                elif name == "get_game_events":
+                    return await handler.get_events(**arguments)
+                elif name == "get_event_detail":
+                    url = arguments.get("url")
+                    if not url:
+                        return [types.TextContent(type="text", text="URL 파라미터가 필요합니다.")]
+                    return await handler.get_event_detail(url, **arguments)
+                elif name == "get_game_updates":
+                    return await handler.get_updates(**arguments)
+                elif name == "get_update_detail":
+                    url = arguments.get("url")
+                    if not url:
+                        return [types.TextContent(type="text", text="URL 파라미터가 필요합니다.")]
+                    return await handler.get_update_detail(url, **arguments)
+                else:
+                    return [
+                        types.TextContent(
+                            type="text",
+                            text=f"알 수 없는 도구입니다: {name}"
+                        )
+                    ]
+            
+            except Exception as e:
+                logger.error(f"도구 호출 실패: {name}, 오류: {e}")
+                return [
+                    types.TextContent(
+                        type="text",
+                        text=f"오류: {str(e)}"
+                    )
+                ]
+    
+    async def run(self):
+        """서버 실행"""
+        logger.info("게임 뉴스 MCP 서버 시작")
+        
+        async with stdio_server() as (read_stream, write_stream):
+            await self.server.run(
+                read_stream,
+                write_stream,
+                InitializationOptions(
+                    server_name=settings.SERVER_NAME,
+                    server_version=settings.SERVER_VERSION
+                )
+            )
+
+
+def main():
+    """메인 함수"""
+    server = GameNewsServer()
+    asyncio.run(server.run())
+
+
+if __name__ == "__main__":
+    main() 
