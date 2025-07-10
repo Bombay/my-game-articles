@@ -41,7 +41,7 @@ pip install mcp httpx playwright python-dotenv
 ### 파일 구조
 
 ```
-/
+my-game-articles/
 ├── src/
 │   ├── __init__.py
 │   ├── server.py
@@ -54,12 +54,20 @@ pip install mcp httpx playwright python-dotenv
 │   │   ├── lordnine.py
 │   │   ├── epic_seven.py
 │   │   └── lost_ark.py
+│   ├── handlers/
+│   │   ├── __init__.py
+│   │   ├── base.py
+│   │   ├── lordnine.py
+│   │   ├── epic_seven.py
+│   │   └── lost_ark.py
+│   ├── config/
+│   │   ├── __init__.py
+│   │   └── settings.py
 │   └── utils/
 │       ├── __init__.py
 │       └── helpers.py
 ├── tests/
 ├── requirements.txt
-├── .env.example
 ├── .gitignore
 └── README.md
 ```
