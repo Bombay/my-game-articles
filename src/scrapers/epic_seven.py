@@ -166,14 +166,20 @@ class EpicSevenScraper(BaseScraper):
             if not article_id:
                 raise ScrapingException(f"URL에서 article_id를 추출할 수 없습니다: {url}")
             
-            # 상세 정보 API 구현
-            detail_url = f"{self.BASE_URL}/article/{article_id}"
-            params = {
-                "interaction_type_code": "LIKE,DISLIKE,COMMENT,VIEW",
-                "content_yn": "Y"
-            }
-            
+            # OnStove API를 사용한 상세 조회
             try:
+                import time
+                timestamp = int(time.time() * 1000)
+                
+                detail_url = "https://api.onstove.com/cwms/v3.0/article"
+                params = {
+                    "article_id": article_id,
+                    "interaction_type_code": "LIKE,DISLIKE,VIEW,COMMENT",
+                    "translation_yn": "N",
+                    "request_id": "CM",
+                    "timestemp": timestamp
+                }
+                
                 response = await self.make_request(detail_url, params=params)
                 data = response.json()
                 
@@ -181,6 +187,14 @@ class EpicSevenScraper(BaseScraper):
                     raise ScrapingException("상세 정보 응답 데이터 형식이 올바르지 않습니다")
                 
                 article = data.get('value', {})
+                # HTML 태그 제거 및 텍스트 정리
+                if 'content' in article:
+                    content = article['content']
+                    # HTML 태그 제거
+                    from bs4 import BeautifulSoup
+                    soup = BeautifulSoup(content, 'html.parser')
+                    article['content'] = soup.get_text(separator=' ', strip=True)
+                
                 return self._parse_article_detail(article, category)
                 
             except Exception as e:
@@ -323,11 +337,11 @@ class EpicSevenScraper(BaseScraper):
     
     def _extract_article_id_from_url(self, url: str) -> Optional[str]:
         """URL에서 article_id 추출"""
-        if not isinstance(url, str):
-            return None
+        # URL을 문자열로 변환 (pydantic HttpUrl 타입 대응)
+        url_str = str(url)
         
         # 에픽세븐 URL 패턴: https://page.onstove.com/epicseven/global/view/10867009
-        match = re.search(r'/view/(\d+)', url)
+        match = re.search(r'/view/(\d+)', url_str)
         if match:
             return match.group(1)
         
@@ -339,7 +353,7 @@ class EpicSevenScraper(BaseScraper):
         ]
         
         for pattern in patterns:
-            match = re.search(pattern, url)
+            match = re.search(pattern, url_str)
             if match:
                 return match.group(1)
         

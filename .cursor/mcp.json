@@ -1,7 +1,12 @@
 {
   "mcpServers": {
-    "game_news_working": {
-      "command": "/Users/hyuntkim/workspace/my-game-articles/run_mcp_server.sh"
+    "simple-game-news": {
+      "command": "/Users/hyuntkim/workspace/my-game-articles/.venv/bin/python",
+      "args": ["src/simple_server.py"],
+      "cwd": "/Users/hyuntkim/workspace/my-game-articles",
+      "env": {
+        "PYTHONPATH": "/Users/hyuntkim/workspace/my-game-articles"
+      }
     }
   }
 }

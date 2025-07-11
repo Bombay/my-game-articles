@@ -158,9 +158,49 @@ class LordnineScraper(BaseScraper):
             if not article_id:
                 raise ScrapingException(f"URL에서 article_id를 추출할 수 없습니다: {url}")
             
-            # 상세 정보 API가 작동하지 않으므로, 목록에서 해당 항목을 찾아서 반환
-            # 이는 임시 해결책이며, summary 정보를 content로 사용합니다
+            # OnStove API를 사용한 상세 조회
+            try:
+                import time
+                timestamp = int(time.time() * 1000)
+                
+                detail_url = f"{self.BASE_URL}/cwms/v3.0/article"
+                params = {
+                    "article_id": article_id,
+                    "interaction_type_code": "LIKE,DISLIKE,VIEW,COMMENT",
+                    "translation_yn": "N",
+                    "request_id": "CM",
+                    "timestemp": timestamp
+                }
+                
+                response = await self.make_request(detail_url, params=params)
+                data = response.json()
+                
+                if not self.validate_response_data(data, ['value']):
+                    raise ScrapingException("상세 정보 응답 데이터 형식이 올바르지 않습니다")
+                
+                article = data.get('value', {})
+                # HTML 태그 제거 및 텍스트 정리
+                if 'content' in article:
+                    content = article['content']
+                    # HTML 태그 제거
+                    from bs4 import BeautifulSoup
+                    soup = BeautifulSoup(content, 'html.parser')
+                    article['content'] = soup.get_text(separator=' ', strip=True)
+                
+                return self._parse_article_detail(article, category)
+                
+            except Exception as e:
+                # 상세 API 실패 시 목록에서 찾기 (fallback)
+                return await self._get_detail_from_list(article_id, category)
             
+        except Exception as e:
+            if isinstance(e, ScrapingException):
+                raise
+            raise ScrapingException(f"상세 정보 조회 중 오류 발생: {str(e)}")
+    
+    async def _get_detail_from_list(self, article_id: str, category: NewsType) -> Optional[GameNews]:
+        """목록에서 상세 정보 찾기 (fallback)"""
+        try:
             # 카테고리에 따라 적절한 목록 조회
             if category == NewsType.ANNOUNCEMENT:
                 articles_list = await self.get_announcements()
@@ -178,13 +218,10 @@ class LordnineScraper(BaseScraper):
                     article.content = article.summary
                     return article
             
-            # 찾지 못한 경우 None 반환
             return None
             
         except Exception as e:
-            if isinstance(e, ScrapingException):
-                raise
-            raise ScrapingException(f"상세 정보 조회 중 오류 발생: {str(e)}")
+            raise ScrapingException(f"목록에서 상세 정보 찾기 실패: {str(e)}")
     
     def _parse_article_data(self, article: Dict[str, Any], category: NewsType) -> Optional[GameNews]:
         """게시글 데이터를 GameNews로 변환"""
@@ -287,9 +324,16 @@ class LordnineScraper(BaseScraper):
     def _extract_article_id_from_url(self, url: str) -> Optional[str]:
         """URL에서 article_id 추출"""
         # https://page.onstove.com/l9/global/view/{article_id} 형식
+        
+        # URL을 문자열로 변환 (pydantic HttpUrl 타입 대응)
+        url_str = str(url)
+        
         pattern = r'/view/(\d+)'
-        match = re.search(pattern, url)
-        return match.group(1) if match else None
+        match = re.search(pattern, url_str)
+        if match:
+            return match.group(1)
+        else:
+            return None
     
     def _is_important_article(self, article: Dict[str, Any]) -> bool:
         """중요 게시글 판단"""
