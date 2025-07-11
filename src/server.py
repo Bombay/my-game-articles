@@ -1,75 +1,82 @@
+#!/usr/bin/env python3
 """
-게임 뉴스 수집 MCP 서버
-
-3개 게임(에픽세븐, 로스트아크, 로드나인)의 뉴스 정보를 수집하는 MCP 서버
+게임 뉴스 수집 MCP 서버 - 메인 진입점
 """
 
 import asyncio
 import logging
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
-from mcp import types
+import sys
+import json
+from typing import List, Sequence, Any, Dict
+
+# MCP 관련 import
 from mcp.server import Server
-from mcp.server.models import InitializationOptions
-from mcp.types import ServerCapabilities
 from mcp.server.stdio import stdio_server
+from mcp.server.models import InitializationOptions
+from mcp.types import ServerCapabilities, Tool, TextContent, ToolsCapability
 
-from .config.settings import settings
-from .handlers.lordnine import LordnineHandler
-from .handlers.epic_seven import EpicSevenHandler
-from .handlers.lost_ark import LostArkHandler
-
+# 게임 스크래퍼 import
+from src.scrapers.lordnine import LordnineScraper
+from src.scrapers.epic_seven import EpicSevenScraper
+from src.scrapers.lost_ark import LostArkScraper
+from src.models.exceptions import ScrapingException
 
 # 로깅 설정
 logging.basicConfig(
-    level=getattr(logging, settings.LOG_LEVEL),
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler(sys.stderr)]
 )
 logger = logging.getLogger(__name__)
 
+# 서버 생성
+app = Server("game-news-scraper")
 
-# MCP 서버 인스턴스 생성
-server = Server(settings.SERVER_NAME)
-
-# 게임별 핸들러 초기화
-handlers = {
-    "lordnine": LordnineHandler(),
-    "epic_seven": EpicSevenHandler(),
-    "lost_ark": LostArkHandler()
+# 스크래퍼 인스턴스
+scrapers = {
+    "lordnine": LordnineScraper(),
+    "epic_seven": EpicSevenScraper(),
+    "lost_ark": LostArkScraper()
 }
 
-
-@server.list_tools()
-async def handle_list_tools() -> List[types.Tool]:
-    """사용 가능한 도구 목록 반환"""
-    logger.info("=== list_tools 요청 받음 ===")
+@app.list_tools()
+async def list_tools() -> List[Tool]:
+    """게임 뉴스 수집 도구 목록"""
+    logger.info("=== 게임 뉴스 수집 도구 목록 요청됨 ===")
+    
     tools = [
-        # 공지사항 도구
-        types.Tool(
+        Tool(
             name="get_game_announcements",
-            description="지정된 게임의 최신 공지사항 목록을 가져옵니다.",
+            description="게임의 공지사항 목록을 조회합니다",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "game": {
                         "type": "string",
-                        "enum": settings.SUPPORTED_GAMES,
-                        "description": "게임 이름 (lordnine, epic_seven, lost_ark)"
+                        "enum": ["lordnine", "epic_seven", "lost_ark"],
+                        "description": "게임 종류 (lordnine: 로드나인, epic_seven: 에픽세븐, lost_ark: 로스트아크)"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "default": 10,
+                        "minimum": 1,
+                        "maximum": 50,
+                        "description": "조회할 공지사항 수 (기본값: 10)"
                     }
                 },
                 "required": ["game"]
             }
         ),
-        types.Tool(
+        Tool(
             name="get_announcement_detail",
-            description="특정 공지사항의 상세 정보를 가져옵니다.",
+            description="공지사항의 상세 정보를 조회합니다",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "game": {
                         "type": "string",
-                        "enum": settings.SUPPORTED_GAMES,
-                        "description": "게임 이름 (lordnine, epic_seven, lost_ark)"
+                        "enum": ["lordnine", "epic_seven", "lost_ark"],
+                        "description": "게임 종류"
                     },
                     "url": {
                         "type": "string",
@@ -79,33 +86,38 @@ async def handle_list_tools() -> List[types.Tool]:
                 "required": ["game", "url"]
             }
         ),
-        
-        # 이벤트 도구
-        types.Tool(
+        Tool(
             name="get_game_events",
-            description="지정된 게임의 최신 이벤트 목록을 가져옵니다.",
+            description="게임의 이벤트 목록을 조회합니다",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "game": {
                         "type": "string",
-                        "enum": settings.SUPPORTED_GAMES,
-                        "description": "게임 이름 (lordnine, epic_seven, lost_ark)"
+                        "enum": ["lordnine", "epic_seven", "lost_ark"],
+                        "description": "게임 종류"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "default": 10,
+                        "minimum": 1,
+                        "maximum": 50,
+                        "description": "조회할 이벤트 수 (기본값: 10)"
                     }
                 },
                 "required": ["game"]
             }
         ),
-        types.Tool(
+        Tool(
             name="get_event_detail",
-            description="특정 이벤트의 상세 정보를 가져옵니다.",
+            description="이벤트의 상세 정보를 조회합니다",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "game": {
                         "type": "string",
-                        "enum": settings.SUPPORTED_GAMES,
-                        "description": "게임 이름 (lordnine, epic_seven, lost_ark)"
+                        "enum": ["lordnine", "epic_seven", "lost_ark"],
+                        "description": "게임 종류"
                     },
                     "url": {
                         "type": "string",
@@ -115,33 +127,38 @@ async def handle_list_tools() -> List[types.Tool]:
                 "required": ["game", "url"]
             }
         ),
-        
-        # 업데이트 도구
-        types.Tool(
+        Tool(
             name="get_game_updates",
-            description="지정된 게임의 최신 업데이트 목록을 가져옵니다.",
+            description="게임의 업데이트 목록을 조회합니다",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "game": {
                         "type": "string",
-                        "enum": settings.SUPPORTED_GAMES,
-                        "description": "게임 이름 (lordnine, epic_seven, lost_ark)"
+                        "enum": ["lordnine", "epic_seven", "lost_ark"],
+                        "description": "게임 종류"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "default": 10,
+                        "minimum": 1,
+                        "maximum": 50,
+                        "description": "조회할 업데이트 수 (기본값: 10)"
                     }
                 },
                 "required": ["game"]
             }
         ),
-        types.Tool(
+        Tool(
             name="get_update_detail",
-            description="특정 업데이트의 상세 정보를 가져옵니다.",
+            description="업데이트의 상세 정보를 조회합니다",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "game": {
                         "type": "string",
-                        "enum": settings.SUPPORTED_GAMES,
-                        "description": "게임 이름 (lordnine, epic_seven, lost_ark)"
+                        "enum": ["lordnine", "epic_seven", "lost_ark"],
+                        "description": "게임 종류"
                     },
                     "url": {
                         "type": "string",
@@ -153,110 +170,239 @@ async def handle_list_tools() -> List[types.Tool]:
         )
     ]
     
-    logger.info(f"도구 목록 요청: {len(tools)}개 도구 반환")
-    logger.info(f"반환할 도구들: {[tool.name for tool in tools]}")
+    logger.info(f"=== {len(tools)}개 도구 반환 ===")
     return tools
 
-
-@server.call_tool()
-async def handle_call_tool(
-    name: str, 
-    arguments: Dict[str, Any]
-) -> Sequence[types.TextContent]:
-    """도구 호출 핸들러"""
-    try:
-        logger.info(f"도구 호출: {name}, 인수: {arguments}")
-        
-        # 게임 파라미터 확인
-        game = arguments.get("game")
-        if not game or game not in handlers:
-            return [
-                types.TextContent(
-                    type="text",
-                    text=f"지원하지 않는 게임입니다: {game}. 지원 게임: {', '.join(settings.SUPPORTED_GAMES)}"
-                )
-            ]
-        
-        handler = handlers[game]
-        
-        # 도구별 핸들러 호출
-        if name == "get_game_announcements":
-            return await handler.get_announcements(**arguments)
-        elif name == "get_announcement_detail":
-            url = arguments.get("url")
-            if not url:
-                return [types.TextContent(type="text", text="URL 파라미터가 필요합니다.")]
-            return await handler.get_announcement_detail(url, **arguments)
-        elif name == "get_game_events":
-            return await handler.get_events(**arguments)
-        elif name == "get_event_detail":
-            url = arguments.get("url")
-            if not url:
-                return [types.TextContent(type="text", text="URL 파라미터가 필요합니다.")]
-            return await handler.get_event_detail(url, **arguments)
-        elif name == "get_game_updates":
-            return await handler.get_updates(**arguments)
-        elif name == "get_update_detail":
-            url = arguments.get("url")
-            if not url:
-                return [types.TextContent(type="text", text="URL 파라미터가 필요합니다.")]
-            return await handler.get_update_detail(url, **arguments)
-        else:
-            return [
-                types.TextContent(
-                    type="text",
-                    text=f"알 수 없는 도구입니다: {name}"
-                )
-            ]
+@app.call_tool()
+async def call_tool(name: str, arguments: Dict[str, Any]) -> Sequence[TextContent]:
+    """도구 호출 처리"""
+    logger.info(f"=== 도구 호출: {name}, 인수: {arguments} ===")
     
+    try:
+        game = arguments.get("game")
+        if game not in scrapers:
+            return [TextContent(type="text", text=f"❌ 지원하지 않는 게임입니다: {game}")]
+        
+        scraper = scrapers[game]
+        
+        if name == "get_game_announcements":
+            return await handle_get_announcements(scraper, arguments)
+        elif name == "get_announcement_detail":
+            return await handle_get_announcement_detail(scraper, arguments)
+        elif name == "get_game_events":
+            return await handle_get_events(scraper, arguments)
+        elif name == "get_event_detail":
+            return await handle_get_event_detail(scraper, arguments)
+        elif name == "get_game_updates":
+            return await handle_get_updates(scraper, arguments)
+        elif name == "get_update_detail":
+            return await handle_get_update_detail(scraper, arguments)
+        else:
+            return [TextContent(type="text", text=f"❌ 알 수 없는 도구: {name}")]
+            
     except Exception as e:
-        logger.error(f"도구 호출 실패: {name}, 오류: {e}")
-        return [
-            types.TextContent(
-                type="text",
-                text=f"오류: {str(e)}"
-            )
-        ]
+        logger.error(f"도구 실행 중 오류: {e}", exc_info=True)
+        return [TextContent(type="text", text=f"❌ 오류 발생: {str(e)}")]
 
+async def handle_get_announcements(scraper, arguments: Dict[str, Any]) -> Sequence[TextContent]:
+    """공지사항 목록 조회 처리"""
+    try:
+        limit = arguments.get("limit", 10)
+        announcements = await scraper.get_announcements()
+        
+        if not announcements:
+            return [TextContent(type="text", text="📋 공지사항이 없습니다.")]
+        
+        # 제한된 개수만 반환
+        limited_announcements = announcements[:limit]
+        
+        result = f"📢 **{scraper.game_type.value} 공지사항** ({len(limited_announcements)}개)\n\n"
+        
+        for i, news in enumerate(limited_announcements, 1):
+            result += f"**{i}. {news.title}**\n"
+            result += f"   📅 {news.published_at.strftime('%Y-%m-%d %H:%M')}\n"
+            result += f"   🔗 {news.url}\n"
+            if news.tags:
+                result += f"   🏷️ {', '.join(news.tags)}\n"
+            result += "\n"
+        
+        return [TextContent(type="text", text=result)]
+        
+    except Exception as e:
+        logger.error(f"공지사항 조회 오류: {e}", exc_info=True)
+        return [TextContent(type="text", text=f"❌ 공지사항 조회 중 오류 발생: {str(e)}")]
 
-async def run_server():
-    """서버 실행"""
-    logger.info("=== 게임 뉴스 MCP 서버 시작 ===")
-    logger.info(f"서버명: {settings.SERVER_NAME} v{settings.SERVER_VERSION}")
-    logger.info(f"지원 게임: {settings.SUPPORTED_GAMES}")
-    logger.info(f"핸들러 수: {len(handlers)}")
-    logger.info(f"로그 레벨: {settings.LOG_LEVEL}")
+async def handle_get_announcement_detail(scraper, arguments: Dict[str, Any]) -> Sequence[TextContent]:
+    """공지사항 상세 조회 처리"""
+    try:
+        url = arguments.get("url")
+        if not url:
+            return [TextContent(type="text", text="❌ URL이 필요합니다.")]
+        
+        detail = await scraper.get_announcement_detail(url)
+        
+        if not detail:
+            return [TextContent(type="text", text="❌ 공지사항 상세 정보를 찾을 수 없습니다.")]
+        
+        result = f"📢 **{detail.title}**\n\n"
+        result += f"📅 **게시일:** {detail.published_at.strftime('%Y-%m-%d %H:%M')}\n"
+        result += f"🔗 **URL:** {detail.url}\n"
+        if detail.tags:
+            result += f"🏷️ **태그:** {', '.join(detail.tags)}\n"
+        result += "\n"
+        
+        if detail.content:
+            result += "📝 **내용:**\n"
+            result += detail.content[:1000]  # 내용 제한
+            if len(detail.content) > 1000:
+                result += "...\n\n(내용이 길어서 일부만 표시됩니다)"
+        
+        return [TextContent(type="text", text=result)]
+        
+    except Exception as e:
+        logger.error(f"공지사항 상세 조회 오류: {e}", exc_info=True)
+        return [TextContent(type="text", text=f"❌ 공지사항 상세 조회 중 오류 발생: {str(e)}")]
+
+async def handle_get_events(scraper, arguments: Dict[str, Any]) -> Sequence[TextContent]:
+    """이벤트 목록 조회 처리"""
+    try:
+        limit = arguments.get("limit", 10)
+        events = await scraper.get_events()
+        
+        if not events:
+            return [TextContent(type="text", text="🎉 진행 중인 이벤트가 없습니다.")]
+        
+        limited_events = events[:limit]
+        
+        result = f"🎉 **{scraper.game_type.value} 이벤트** ({len(limited_events)}개)\n\n"
+        
+        for i, news in enumerate(limited_events, 1):
+            result += f"**{i}. {news.title}**\n"
+            result += f"   📅 {news.published_at.strftime('%Y-%m-%d %H:%M')}\n"
+            result += f"   🔗 {news.url}\n"
+            if news.tags:
+                result += f"   🏷️ {', '.join(news.tags)}\n"
+            result += "\n"
+        
+        return [TextContent(type="text", text=result)]
+        
+    except Exception as e:
+        logger.error(f"이벤트 조회 오류: {e}", exc_info=True)
+        return [TextContent(type="text", text=f"❌ 이벤트 조회 중 오류 발생: {str(e)}")]
+
+async def handle_get_event_detail(scraper, arguments: Dict[str, Any]) -> Sequence[TextContent]:
+    """이벤트 상세 조회 처리"""
+    try:
+        url = arguments.get("url")
+        if not url:
+            return [TextContent(type="text", text="❌ URL이 필요합니다.")]
+        
+        detail = await scraper.get_event_detail(url)
+        
+        if not detail:
+            return [TextContent(type="text", text="❌ 이벤트 상세 정보를 찾을 수 없습니다.")]
+        
+        result = f"🎉 **{detail.title}**\n\n"
+        result += f"📅 **게시일:** {detail.published_at.strftime('%Y-%m-%d %H:%M')}\n"
+        result += f"🔗 **URL:** {detail.url}\n"
+        if detail.tags:
+            result += f"🏷️ **태그:** {', '.join(detail.tags)}\n"
+        result += "\n"
+        
+        if detail.content:
+            result += "📝 **내용:**\n"
+            result += detail.content[:1000]
+            if len(detail.content) > 1000:
+                result += "...\n\n(내용이 길어서 일부만 표시됩니다)"
+        
+        return [TextContent(type="text", text=result)]
+        
+    except Exception as e:
+        logger.error(f"이벤트 상세 조회 오류: {e}", exc_info=True)
+        return [TextContent(type="text", text=f"❌ 이벤트 상세 조회 중 오류 발생: {str(e)}")]
+
+async def handle_get_updates(scraper, arguments: Dict[str, Any]) -> Sequence[TextContent]:
+    """업데이트 목록 조회 처리"""
+    try:
+        limit = arguments.get("limit", 10)
+        updates = await scraper.get_updates()
+        
+        if not updates:
+            return [TextContent(type="text", text="🔄 최근 업데이트가 없습니다.")]
+        
+        limited_updates = updates[:limit]
+        
+        result = f"🔄 **{scraper.game_type.value} 업데이트** ({len(limited_updates)}개)\n\n"
+        
+        for i, news in enumerate(limited_updates, 1):
+            result += f"**{i}. {news.title}**\n"
+            result += f"   📅 {news.published_at.strftime('%Y-%m-%d %H:%M')}\n"
+            result += f"   🔗 {news.url}\n"
+            if news.tags:
+                result += f"   🏷️ {', '.join(news.tags)}\n"
+            result += "\n"
+        
+        return [TextContent(type="text", text=result)]
+        
+    except Exception as e:
+        logger.error(f"업데이트 조회 오류: {e}", exc_info=True)
+        return [TextContent(type="text", text=f"❌ 업데이트 조회 중 오류 발생: {str(e)}")]
+
+async def handle_get_update_detail(scraper, arguments: Dict[str, Any]) -> Sequence[TextContent]:
+    """업데이트 상세 조회 처리"""
+    try:
+        url = arguments.get("url")
+        if not url:
+            return [TextContent(type="text", text="❌ URL이 필요합니다.")]
+        
+        detail = await scraper.get_update_detail(url)
+        
+        if not detail:
+            return [TextContent(type="text", text="❌ 업데이트 상세 정보를 찾을 수 없습니다.")]
+        
+        result = f"🔄 **{detail.title}**\n\n"
+        result += f"📅 **게시일:** {detail.published_at.strftime('%Y-%m-%d %H:%M')}\n"
+        result += f"🔗 **URL:** {detail.url}\n"
+        if detail.tags:
+            result += f"🏷️ **태그:** {', '.join(detail.tags)}\n"
+        result += "\n"
+        
+        if detail.content:
+            result += "📝 **내용:**\n"
+            result += detail.content[:1000]
+            if len(detail.content) > 1000:
+                result += "...\n\n(내용이 길어서 일부만 표시됩니다)"
+        
+        return [TextContent(type="text", text=result)]
+        
+    except Exception as e:
+        logger.error(f"업데이트 상세 조회 오류: {e}", exc_info=True)
+        return [TextContent(type="text", text=f"❌ 업데이트 상세 조회 중 오류 발생: {str(e)}")]
+
+async def main():
+    logger.info("=== 게임 뉴스 수집 MCP 서버 시작 ===")
     
     try:
         async with stdio_server() as (read_stream, write_stream):
-            logger.info("=== stdio 서버 시작됨 ===")
-            logger.info("=== MCP 서버 실행 시작 ===")
-            initialization_options = InitializationOptions(
-                server_name=settings.SERVER_NAME,
-                server_version=settings.SERVER_VERSION,
-                capabilities=ServerCapabilities()
+            logger.info("=== STDIO 서버 시작됨 ===")
+            
+            # 명시적으로 툴 기능 활성화
+            capabilities = ServerCapabilities(
+                tools=ToolsCapability(listChanged=True)
             )
-            logger.info(f"=== 초기화 옵션: {initialization_options} ===")
-            await server.run(
+            
+            await app.run(
                 read_stream,
                 write_stream,
-                initialization_options
+                InitializationOptions(
+                    server_name="game-news-scraper",
+                    server_version="1.0.0",
+                    capabilities=capabilities
+                )
             )
     except Exception as e:
-        logger.error(f"=== 서버 실행 오류: {e} ===")
+        logger.error(f"서버 실행 오류: {e}", exc_info=True)
         raise
 
-
-def main():
-    """메인 함수"""
-    # 시작 메시지를 stderr로 출력 (stdio 통신에 방해되지 않도록)
-    import sys
-    print("=== MCP 서버 시작 중... ===", file=sys.stderr)
-    print(f"=== Python 경로: {sys.executable} ===", file=sys.stderr)
-    print(f"=== 작업 디렉토리: {Path.cwd()} ===", file=sys.stderr)
-    
-    asyncio.run(run_server())
-
-
 if __name__ == "__main__":
-    main() 
+    asyncio.run(main()) 
